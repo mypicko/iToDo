@@ -1,0 +1,26 @@
+[package]
+name = "itodo"
+version = "1.0.0"
+description = "iToDo - A Microsoft ToDo inspired task management application"
+authors = ["iToDo"]
+edition = "2021"
+
+[lib]
+name = "itodo_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.5", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-notification = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.33", features = ["bundled"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+log = "0.4"
+env_logger = "0.11"
+directories = "6"

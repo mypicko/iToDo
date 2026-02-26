@@ -1,11 +1,10 @@
 use chrono::Utc;
 use directories::ProjectDirs;
-use std::path::PathBuf;
-use log::{info, error};
+use log::info;
 use rusqlite::{params, Connection, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
-use simplelog::{CombinedLogger, LevelFilter, WriteLogger, Config, TermLogger, TerminalMode, ColorChoice};
-use std::fs::{self, File};
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::State;
 use uuid::Uuid;
@@ -80,29 +79,6 @@ pub struct UpdateListInput {
     pub order: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Subtask {
-    pub id: String,
-    pub task_id: String,
-    pub title: String,
-    pub is_completed: bool,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateSubtaskInput {
-    pub task_id: String,
-    pub title: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateSubtaskInput {
-    pub id: String,
-    pub title: Option<String>,
-    pub is_completed: Option<bool>,
-}
-
 // ============== Database ==============
 
 pub struct DbConnection(pub Mutex<Connection>);
@@ -115,50 +91,6 @@ fn get_data_dir() -> PathBuf {
     } else {
         PathBuf::from(".")
     }
-}
-
-fn get_log_dir() -> PathBuf {
-    let data_dir = get_data_dir();
-    let log_dir = data_dir.join("logs");
-    fs::create_dir_all(&log_dir).ok();
-    log_dir
-}
-
-fn get_about_file_path() -> PathBuf {
-    let data_dir = get_data_dir();
-    data_dir.join("about.json")
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AboutInfo {
-    pub app_name: String,
-    pub version: String,
-    pub developer: String,
-    pub changelog: String,
-}
-
-fn get_default_about_info() -> AboutInfo {
-    AboutInfo {
-        app_name: "iToDo".to_string(),
-        version: "1.0.0".to_string(),
-        developer: "iToDo Team".to_string(),
-        changelog: "Initial release".to_string(),
-    }
-}
-
-fn init_logger() {
-    let log_dir = get_log_dir();
-    let log_file = log_dir.join(format!("itodo_{}.log", Utc::now().format("%Y-%m-%d")));
-
-    let _ = CombinedLogger::init(vec![
-        TermLogger::new(LevelFilter::Info, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
-        WriteLogger::new(LevelFilter::Info, Config::default(), File::create(&log_file).unwrap_or_else(|_| {
-            File::create("itodo.log").expect("Failed to create log file")
-        })),
-    ]);
-
-    info!("iToDo application starting...");
-    info!("Log file: {:?}", log_file);
 }
 
 fn init_database(conn: &Connection) -> SqliteResult<()> {
@@ -204,20 +136,6 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
         )?;
     }
 
-    // Create subtasks table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS subtasks (
-            id TEXT PRIMARY KEY,
-            task_id TEXT NOT NULL,
-            title TEXT NOT NULL,
-            is_completed INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
-        )",
-        [],
-    )?;
-
     Ok(())
 }
 
@@ -247,17 +165,6 @@ fn row_to_list(row: &rusqlite::Row) -> rusqlite::Result<List> {
         is_default: row.get::<_, i32>(4)? == 1,
         created_at: row.get(5)?,
         order: row.get(6)?,
-    })
-}
-
-fn row_to_subtask(row: &rusqlite::Row) -> rusqlite::Result<Subtask> {
-    Ok(Subtask {
-        id: row.get(0)?,
-        task_id: row.get(1)?,
-        title: row.get(2)?,
-        is_completed: row.get::<_, i32>(3)? == 1,
-        created_at: row.get(4)?,
-        updated_at: row.get(5)?,
     })
 }
 
@@ -340,7 +247,6 @@ fn update_list(input: UpdateListInput, db: State<DbConnection>) -> Result<List, 
 
 #[tauri::command]
 fn delete_list(id: String, db: State<DbConnection>) -> Result<(), String> {
-    info!("delete_list called: {}", id);
     let conn = db.0.lock().map_err(|e| e.to_string())?;
 
     let is_default: i32 = conn
@@ -354,7 +260,6 @@ fn delete_list(id: String, db: State<DbConnection>) -> Result<(), String> {
     conn.execute("DELETE FROM tasks WHERE list_id = ?1", [&id]).map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM lists WHERE id = ?1", [&id]).map_err(|e| e.to_string())?;
 
-    info!("delete_list completed: {}", id);
     Ok(())
 }
 
@@ -582,11 +487,9 @@ fn update_task(input: UpdateTaskInput, db: State<DbConnection>) -> Result<Task, 
 
 #[tauri::command]
 fn delete_task(id: String, db: State<DbConnection>) -> Result<(), String> {
-    info!("delete_task called: {}", id);
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM tasks WHERE id = ?1", [&id])
         .map_err(|e| e.to_string())?;
-    info!("delete_task completed: {}", id);
     Ok(())
 }
 
@@ -626,202 +529,6 @@ fn toggle_task_completed(id: String, db: State<DbConnection>) -> Result<Task, St
         .map_err(|e| e.to_string())
 }
 
-// ============== Tauri Commands - Subtasks ==============
-
-#[tauri::command]
-fn get_subtasks(task_id: String, db: State<DbConnection>) -> Result<Vec<Subtask>, String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare("SELECT id, task_id, title, is_completed, created_at, updated_at FROM subtasks WHERE task_id = ?1 ORDER BY created_at ASC")
-        .map_err(|e| e.to_string())?;
-
-    let subtasks = stmt
-        .query_map([&task_id], row_to_subtask)
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-
-    Ok(subtasks)
-}
-
-#[tauri::command]
-fn create_subtask(input: CreateSubtaskInput, db: State<DbConnection>) -> Result<Subtask, String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let id = Uuid::new_v4().to_string();
-    let now = Utc::now().to_rfc3339();
-    let created_at = now.clone();
-    let updated_at = now;
-
-    conn.execute(
-        "INSERT INTO subtasks (id, task_id, title, is_completed, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![id, input.task_id, input.title, 0, created_at, updated_at],
-    ).map_err(|e| e.to_string())?;
-
-    Ok(Subtask {
-        id,
-        task_id: input.task_id,
-        title: input.title,
-        is_completed: false,
-        created_at,
-        updated_at,
-    })
-}
-
-#[tauri::command]
-fn update_subtask(input: UpdateSubtaskInput, db: State<DbConnection>) -> Result<Subtask, String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let now = Utc::now().to_rfc3339();
-
-    // Get current subtask
-    let mut stmt = conn
-        .prepare("SELECT id, task_id, title, is_completed, created_at, updated_at FROM subtasks WHERE id = ?1")
-        .map_err(|e| e.to_string())?;
-
-    let mut subtask = stmt
-        .query_row([&input.id], row_to_subtask)
-        .map_err(|e| e.to_string())?;
-
-    // Apply updates
-    if let Some(title) = input.title {
-        subtask.title = title;
-    }
-    if let Some(is_completed) = input.is_completed {
-        subtask.is_completed = is_completed;
-    }
-    subtask.updated_at = now;
-
-    conn.execute(
-        "UPDATE subtasks SET title = ?1, is_completed = ?2, updated_at = ?3 WHERE id = ?4",
-        params![subtask.title, subtask.is_completed as i32, subtask.updated_at, subtask.id],
-    ).map_err(|e| e.to_string())?;
-
-    Ok(subtask)
-}
-
-#[tauri::command]
-fn delete_subtask(id: String, db: State<DbConnection>) -> Result<(), String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM subtasks WHERE id = ?1", [&id])
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-fn toggle_subtask_completed(id: String, db: State<DbConnection>) -> Result<Subtask, String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let now = Utc::now().to_rfc3339();
-
-    conn.execute(
-        "UPDATE subtasks SET is_completed = NOT is_completed, updated_at = ?1 WHERE id = ?2",
-        params![now, id],
-    ).map_err(|e| e.to_string())?;
-
-    let mut stmt = conn
-        .prepare("SELECT id, task_id, title, is_completed, created_at, updated_at FROM subtasks WHERE id = ?1")
-        .map_err(|e| e.to_string())?;
-
-    stmt.query_row([&id], row_to_subtask)
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn get_all_subtasks(db: State<DbConnection>) -> Result<Vec<Subtask>, String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare("SELECT id, task_id, title, is_completed, created_at, updated_at FROM subtasks ORDER BY created_at ASC")
-        .map_err(|e| e.to_string())?;
-
-    let subtasks = stmt
-        .query_map([], row_to_subtask)
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-
-    Ok(subtasks)
-}
-
-// ============== Tauri Commands - Log ==============
-
-#[tauri::command]
-fn read_log_files() -> Result<Vec<String>, String> {
-    let log_dir = get_log_dir();
-    let mut log_files: Vec<String> = Vec::new();
-
-    if let Ok(entries) = fs::read_dir(&log_dir) {
-        for entry in entries.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                if name.ends_with(".log") {
-                    log_files.push(name.to_string());
-                }
-            }
-        }
-    }
-
-    // Sort by name (date) descending
-    log_files.sort_by(|a, b| b.cmp(a));
-
-    Ok(log_files)
-}
-
-#[tauri::command]
-fn read_log_content(filename: String) -> Result<String, String> {
-    let log_dir = get_log_dir();
-    let log_file = log_dir.join(&filename);
-
-    fs::read_to_string(&log_file)
-        .map_err(|e| format!("Failed to read log file: {}", e))
-}
-
-#[tauri::command]
-fn get_log_path() -> Result<String, String> {
-    let log_dir = get_log_dir();
-    Ok(log_dir.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-fn show_message(title: String, message: String) -> Result<(), String> {
-    use std::process::Command;
-    info!("show_message called: title={}, message={}", title, message);
-    // Use osascript to show native macOS dialog
-    let script = format!(
-        "display dialog \"{}\" with title \"{}\" buttons {{\"OK\"}} default button 1",
-        message.replace("\"", "\\\""),
-        title.replace("\"", "\\\"")
-    );
-    let output = Command::new("osascript")
-        .args(["-e", &script])
-        .output();
-    match output {
-        Ok(out) => {
-            info!("osascript output: {:?}", out);
-        }
-        Err(e) => {
-            error!("osascript error: {}", e);
-        }
-    }
-    Ok(())
-}
-
-#[tauri::command]
-fn get_about_info() -> Result<AboutInfo, String> {
-    let about_file = get_about_file_path();
-
-    if about_file.exists() {
-        let content = fs::read_to_string(&about_file)
-            .map_err(|e| format!("Failed to read about file: {}", e))?;
-        let info: AboutInfo = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse about file: {}", e))?;
-        Ok(info)
-    } else {
-        // Return default about info and create the file
-        let default_info = get_default_about_info();
-        let content = serde_json::to_string_pretty(&default_info)
-            .map_err(|e| format!("Failed to serialize about info: {}", e))?;
-        fs::write(&about_file, content).ok();
-        Ok(default_info)
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportData {
     pub version: String,
@@ -831,8 +538,7 @@ pub struct ExportData {
 }
 
 #[tauri::command]
-async fn export_tasks_to_file(list_id: Option<String>, _app: tauri::AppHandle, db: State<'_, DbConnection>) -> Result<bool, String> {
-    // Get tasks and lists
+async fn export_tasks_to_file(list_id: Option<String>, db: State<'_, DbConnection>) -> Result<bool, String> {
     let (tasks, lists) = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
 
@@ -882,14 +588,13 @@ async fn export_tasks_to_file(list_id: Option<String>, _app: tauri::AppHandle, d
 
     let export_data = ExportData {
         version: "1.0".to_string(),
-        export_date: chrono::Utc::now().to_rfc3339(),
+        export_date: Utc::now().to_rfc3339(),
         tasks,
         lists,
     };
 
     let json_data = serde_json::to_string_pretty(&export_data).map_err(|e| e.to_string())?;
 
-    // Save to app's data directory
     let data_dir = get_data_dir();
     let file_name = format!("itodo-export-{}.json", chrono::Local::now().format("%Y-%m-%d_%H%M%S"));
     let file_path = data_dir.join(&file_name);
@@ -901,10 +606,8 @@ async fn export_tasks_to_file(list_id: Option<String>, _app: tauri::AppHandle, d
 
 #[tauri::command]
 async fn import_tasks_from_file(_app: tauri::AppHandle, db: State<'_, DbConnection>) -> Result<Vec<Task>, String> {
-    // Read from data directory
     let data_dir = get_data_dir();
 
-    // Try to find the most recent export file
     let mut export_files: Vec<_> = fs::read_dir(&data_dir)
         .map_err(|e| format!("Cannot read data folder: {}", e))?
         .filter_map(|entry| entry.ok())
@@ -927,7 +630,6 @@ async fn import_tasks_from_file(_app: tauri::AppHandle, db: State<'_, DbConnecti
 
         let mut imported_tasks = Vec::new();
 
-        // First, create any lists that don't exist
         for list in &export_data.lists {
             let mut stmt = conn
                 .prepare("SELECT id FROM lists WHERE id = ?1")
@@ -942,10 +644,9 @@ async fn import_tasks_from_file(_app: tauri::AppHandle, db: State<'_, DbConnecti
             }
         }
 
-        // Then, import tasks
         for task in &export_data.tasks {
-            let new_id = uuid::Uuid::new_v4().to_string();
-            let now = chrono::Utc::now().to_rfc3339();
+            let new_id = Uuid::new_v4().to_string();
+            let now = Utc::now().to_rfc3339();
 
             conn.execute(
                 "INSERT INTO tasks (id, title, content, is_completed, is_important, due_date, start_date, remind_time, repeat_rule, list_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
@@ -981,49 +682,29 @@ async fn import_tasks_from_file(_app: tauri::AppHandle, db: State<'_, DbConnecti
             });
         }
 
-        info!("Imported {} tasks from file", imported_tasks.len());
+        info!("Imported {} tasks", imported_tasks.len());
         Ok(imported_tasks)
     } else {
-        Ok(vec![])
+        Err("No export file found".to_string())
     }
 }
 
 // ============== App Setup ==============
 
 pub fn run() {
-    // Initialize logger first
-    init_logger();
-
+    let _ = env_logger::try_init();
     info!("Starting iToDo application");
 
     let data_dir = get_data_dir();
     let db_path = data_dir.join("itodo.db");
     info!("Database path: {:?}", db_path);
 
-    // Initialize about.json if not exists
-    let about_file = data_dir.join("about.json");
-    if !about_file.exists() {
-        let default_about = get_default_about_info();
-        if let Ok(content) = serde_json::to_string_pretty(&default_about) {
-            let _ = fs::write(&about_file, content);
-            info!("Created default about.json at {:?}", about_file);
-        }
-    }
-
-    // Set up panic hook for logging
-    std::panic::set_hook(Box::new(|panic_info| {
-        error!("Application panic: {:?}", panic_info);
-    }));
-
     let conn = Connection::open(&db_path).expect("Failed to open database");
-    if let Err(e) = init_database(&conn) {
-        error!("Failed to initialize database: {:?}", e);
-        panic!("Failed to initialize database: {:?}", e);
-    }
+    init_database(&conn).expect("Failed to initialize database");
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(DbConnection(Mutex::new(conn)))
         .invoke_handler(tauri::generate_handler![
             get_lists,
@@ -1041,17 +722,6 @@ pub fn run() {
             delete_task,
             toggle_task_important,
             toggle_task_completed,
-            get_subtasks,
-            create_subtask,
-            update_subtask,
-            delete_subtask,
-            toggle_subtask_completed,
-            get_all_subtasks,
-            read_log_files,
-            read_log_content,
-            get_log_path,
-            show_message,
-            get_about_info,
             export_tasks_to_file,
             import_tasks_from_file,
         ])

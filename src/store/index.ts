@@ -1,16 +1,21 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
-import type { Task, List, CreateTaskInput, UpdateTaskInput, CreateListInput, UpdateListInput, FilterType } from '../types';
+import type { Task, List, Subtask, CreateTaskInput, UpdateTaskInput, CreateListInput, UpdateListInput, CreateSubtaskInput, UpdateSubtaskInput, FilterType, Language } from '../types';
+
+type Theme = 'light' | 'dark' | 'system';
 
 interface AppState {
   lists: List[];
   tasks: Task[];
+  subtasks: Record<string, Subtask[]>;
   selectedListId: string | null;
   selectedTask: Task | null;
   filter: FilterType;
   searchQuery: string;
   isLoading: boolean;
   error: string | null;
+  language: Language;
+  theme: Theme;
 
   // Actions
   fetchLists: () => Promise<void>;
@@ -28,22 +33,38 @@ interface AppState {
   toggleTaskImportant: (id: string) => Promise<Task>;
   toggleTaskCompleted: (id: string) => Promise<Task>;
 
+  fetchSubtasks: (taskId: string) => Promise<void>;
+  fetchAllSubtasks: () => Promise<void>;
+  createSubtask: (input: CreateSubtaskInput) => Promise<Subtask>;
+  updateSubtask: (input: UpdateSubtaskInput) => Promise<Subtask>;
+  deleteSubtask: (id: string, taskId: string) => Promise<void>;
+  toggleSubtaskCompleted: (id: string) => Promise<Subtask>;
+
   setSelectedListId: (id: string | null) => void;
   setSelectedTask: (task: Task | null) => void;
   setFilter: (filter: FilterType) => void;
   setSearchQuery: (query: string) => void;
+  setLanguage: (language: Language) => void;
+  setTheme: (theme: Theme) => void;
   clearError: () => void;
+
+  // Import/Export
+  exportTasks: (listId?: string) => Promise<void>;
+  importTasks: () => Promise<Task[]>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
   lists: [],
   tasks: [],
+  subtasks: {},
   selectedListId: null,
   selectedTask: null,
   filter: 'all',
   searchQuery: '',
   isLoading: false,
   error: null,
+  language: 'zh-CN',
+  theme: 'light',
 
   fetchLists: async () => {
     try {
@@ -244,6 +265,108 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  // Subtask actions
+  fetchSubtasks: async (taskId: string) => {
+    try {
+      const subtasks = await invoke<Subtask[]>('get_subtasks', { taskId });
+      const { subtasks: currentSubtasks } = get();
+      set({ subtasks: { ...currentSubtasks, [taskId]: subtasks } });
+    } catch (error) {
+      set({ error: String(error) });
+    }
+  },
+
+  fetchAllSubtasks: async () => {
+    try {
+      const allSubtasks = await invoke<Subtask[]>('get_all_subtasks');
+      const { subtasks: currentSubtasks } = get();
+      // Group subtasks by task_id
+      const newSubtasks: Record<string, Subtask[]> = {};
+      for (const subtask of allSubtasks) {
+        if (!newSubtasks[subtask.task_id]) {
+          newSubtasks[subtask.task_id] = [];
+        }
+        newSubtasks[subtask.task_id].push(subtask);
+      }
+      set({ subtasks: { ...currentSubtasks, ...newSubtasks } });
+    } catch (error) {
+      set({ error: String(error) });
+    }
+  },
+
+  createSubtask: async (input: CreateSubtaskInput) => {
+    try {
+      const subtask = await invoke<Subtask>('create_subtask', { input });
+      const { subtasks } = get();
+      const taskSubtasks = subtasks[input.task_id] || [];
+      set({ subtasks: { ...subtasks, [input.task_id]: [...taskSubtasks, subtask] } });
+      return subtask;
+    } catch (error) {
+      set({ error: String(error) });
+      throw error;
+    }
+  },
+
+  updateSubtask: async (input: UpdateSubtaskInput) => {
+    try {
+      const subtask = await invoke<Subtask>('update_subtask', { input });
+      const { subtasks } = get();
+      const taskId = Object.keys(subtasks).find(key =>
+        subtasks[key].some(s => s.id === input.id)
+      );
+      if (taskId) {
+        set({
+          subtasks: {
+            ...subtasks,
+            [taskId]: subtasks[taskId].map(s => s.id === input.id ? subtask : s)
+          }
+        });
+      }
+      return subtask;
+    } catch (error) {
+      set({ error: String(error) });
+      throw error;
+    }
+  },
+
+  deleteSubtask: async (id: string, taskId: string) => {
+    try {
+      await invoke('delete_subtask', { id });
+      const { subtasks } = get();
+      set({
+        subtasks: {
+          ...subtasks,
+          [taskId]: subtasks[taskId].filter(s => s.id !== id)
+        }
+      });
+    } catch (error) {
+      set({ error: String(error) });
+      throw error;
+    }
+  },
+
+  toggleSubtaskCompleted: async (id: string) => {
+    try {
+      const subtask = await invoke<Subtask>('toggle_subtask_completed', { id });
+      const { subtasks } = get();
+      const taskId = Object.keys(subtasks).find(key =>
+        subtasks[key].some(s => s.id === id)
+      );
+      if (taskId) {
+        set({
+          subtasks: {
+            ...subtasks,
+            [taskId]: subtasks[taskId].map(s => s.id === id ? subtask : s)
+          }
+        });
+      }
+      return subtask;
+    } catch (error) {
+      set({ error: String(error) });
+      throw error;
+    }
+  },
+
   setSelectedListId: (id: string | null) => {
     set({ selectedListId: id, filter: 'all', searchQuery: '' });
     get().fetchTasks(id || undefined);
@@ -251,6 +374,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setSelectedTask: (task: Task | null) => {
     set({ selectedTask: task });
+    if (task) {
+      get().fetchSubtasks(task.id);
+    }
   },
 
   setFilter: (filter: FilterType) => {
@@ -262,7 +388,54 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().searchTasks(query);
   },
 
+  setLanguage: (language: Language) => {
+    set({ language });
+  },
+
+  setTheme: (theme: Theme) => {
+    set({ theme });
+  },
+
   clearError: () => {
     set({ error: null });
+  },
+
+  // Import/Export
+  exportTasks: async (listId?: string) => {
+    try {
+      await invoke('export_tasks_to_file', { listId: listId || null });
+    } catch (error) {
+      console.error('Export error:', error);
+      set({ error: String(error) });
+    }
+  },
+
+  importTasks: async () => {
+    try {
+      const importedTasks = await invoke<Task[]>('import_tasks_from_file');
+      return importedTasks;
+    } catch (error) {
+      console.error('Import error:', error);
+      set({ error: String(error) });
+      return [];
+    }
+  },
+        multiple: false,
+        filters: [{ name: 'JSON', extensions: ['json'] }]
+      });
+      if (filePath && typeof filePath === 'string') {
+        const { readTextFile } = await import('@tauri-apps/plugin-fs');
+        const jsonData = await readTextFile(filePath);
+        const importedTasks = await invoke<Task[]>('import_tasks', { jsonData });
+        // Refresh tasks after import
+        await get().fetchTasks();
+        return importedTasks;
+      }
+      return [];
+    } catch (error) {
+      console.error('Import error:', error);
+      set({ error: String(error) });
+      return [];
+    }
   },
 }));

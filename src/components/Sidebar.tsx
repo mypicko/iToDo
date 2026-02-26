@@ -74,6 +74,16 @@ const icons: Record<string, JSX.Element> = {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
     </svg>
   ),
+  export: (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+    </svg>
+  ),
+  import: (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+    </svg>
+  ),
 };
 
 export default function Sidebar({ onShowMessage }: { onShowMessage?: (msg: {title: string, message: string} | null) => void }) {
@@ -91,7 +101,9 @@ export default function Sidebar({ onShowMessage }: { onShowMessage?: (msg: {titl
     language,
     setLanguage,
     theme,
-    setTheme
+    setTheme,
+    exportTasks,
+    importTasks
   } = useAppStore();
 
   const [showNewListInput, setShowNewListInput] = useState(false);
@@ -177,6 +189,28 @@ export default function Sidebar({ onShowMessage }: { onShowMessage?: (msg: {titl
       onShowMessage?.({ title: isZh ? '关于' : 'About', message: aboutText });
     } catch (error) {
       console.error('Failed to get about info:', error);
+    }
+  };
+
+  const handleExport = async (listId?: string) => {
+    try {
+      await exportTasks(listId);
+      onShowMessage?.({ title: isZh ? '导出成功' : 'Export Success', message: isZh ? '任务已导出到数据目录' : 'Tasks exported to data directory' });
+    } catch (error) {
+      console.error('Export error:', error);
+      onShowMessage?.({ title: isZh ? '导出失败' : 'Export Failed', message: String(error) });
+    }
+  };
+
+  const handleImport = async () => {
+    try {
+      const imported = await importTasks();
+      if (imported.length > 0) {
+        onShowMessage?.({ title: isZh ? '导入成功' : 'Import Success', message: isZh ? `成功导入 ${imported.length} 个任务` : `Successfully imported ${imported.length} tasks` });
+      }
+    } catch (error) {
+      console.error('Import error:', error);
+      onShowMessage?.({ title: isZh ? '导入失败' : 'Import Failed', message: String(error) });
     }
   };
 
@@ -348,6 +382,36 @@ export default function Sidebar({ onShowMessage }: { onShowMessage?: (msg: {titl
               >
                 {icons['log']}
                 {isZh ? '显示日志' : 'Show Log'}
+              </div>
+
+              {/* Export - Submenu */}
+              <div className="relative group/popc">
+                <div className="flex items-center justify-between px-3 py-2 text-sm text-[#323130] hover:bg-[#F3F2F1] rounded cursor-pointer">
+                  <div className="flex items-center gap-2">
+                    {icons['export']}
+                    {isZh ? '导出' : 'Export'}
+                  </div>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                </div>
+                <div className="hidden group-hover/popc:block absolute left-full top-0 ml-1 w-40 bg-white rounded-md shadow-lg border border-[#E1DFDD] p-1">
+                  <button onClick={() => handleExport()} className="w-full text-left px-3 py-1.5 text-sm rounded hover:bg-[#F3F2F1] text-[#323130]">
+                    {isZh ? '全部任务' : 'All Tasks'}
+                  </button>
+                  {lists.map((list) => (
+                    <button key={list.id} onClick={() => handleExport(list.id)} className="w-full text-left px-3 py-1.5 text-sm rounded hover:bg-[#F3F2F1] text-[#323130]">
+                      {list.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Import */}
+              <div
+                onClick={() => { handleImport(); }}
+                className="flex items-center gap-2 px-3 py-2 text-sm text-[#323130] hover:bg-[#F3F2F1] rounded cursor-pointer"
+              >
+                {icons['import']}
+                {isZh ? '导入' : 'Import'}
               </div>
 
               {/* About */}

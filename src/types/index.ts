@@ -13,6 +13,15 @@ export interface Task {
   updated_at: string;
 }
 
+export interface Subtask {
+  id: string;
+  task_id: string;
+  title: string;
+  is_completed: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface List {
   id: string;
   name: string;
@@ -60,4 +69,31 @@ export interface UpdateListInput {
   order?: number;
 }
 
+export interface CreateSubtaskInput {
+  task_id: string;
+  title: string;
+}
+
+export interface UpdateSubtaskInput {
+  id: string;
+  title?: string;
+  is_completed?: boolean;
+}
+
 export type FilterType = 'all' | 'today' | 'planned' | 'important' | 'completed';
+
+export interface RepeatRule {
+  type: 'daily' | 'weekly' | 'monthly' | 'yearly';
+  days?: string[];        // For weekly: ["Mon", "Tue", "Wed", etc.]
+  daysOfMonth?: number[]; // For monthly: [1, 15, 30]
+  monthDays?: number[];    // For yearly: [1, 15]
+}
+
+export type Language = 'zh-CN' | 'en-US';
+
+export type Theme = 'light' | 'dark' | 'system';
+
+export interface AppSettings {
+  language: Language;
+  theme: Theme;
+}

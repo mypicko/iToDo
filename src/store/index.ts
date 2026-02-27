@@ -403,23 +403,25 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Import/Export
   exportTasks: async (listId?: string) => {
     try {
-      await invoke('export_tasks_to_file', { listId: listId || null });
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      const filePath = await save({
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+        defaultPath: `itodo-export-${new Date().toISOString().slice(0, 10)}.json`
+      });
+      if (filePath) {
+        await invoke('export_tasks_to_path', { filePath, listId: listId || null });
+      }
     } catch (error) {
       console.error('Export error:', error);
       set({ error: String(error) });
+      throw error;
     }
   },
 
   importTasks: async () => {
     try {
-      const importedTasks = await invoke<Task[]>('import_tasks_from_file');
-      return importedTasks;
-    } catch (error) {
-      console.error('Import error:', error);
-      set({ error: String(error) });
-      return [];
-    }
-  },
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const filePath = await open({
         multiple: false,
         filters: [{ name: 'JSON', extensions: ['json'] }]
       });

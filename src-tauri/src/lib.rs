@@ -93,6 +93,35 @@ fn get_data_dir() -> PathBuf {
     }
 }
 
+fn get_log_dir() -> PathBuf {
+    get_data_dir().join("logs")
+}
+
+#[derive(Serialize)]
+pub struct AboutInfo {
+    pub app_name: String,
+    pub version: String,
+    pub developer: String,
+    pub developer_email: Option<String>,
+    pub changelog: String,
+}
+
+#[tauri::command]
+fn get_log_path() -> String {
+    get_log_dir().to_string_lossy().to_string()
+}
+
+#[tauri::command]
+fn get_about_info() -> AboutInfo {
+    AboutInfo {
+        app_name: "iToDo".to_string(),
+        version: "1.0.0".to_string(),
+        developer: "iToDo".to_string(),
+        developer_email: None,
+        changelog: "Initial release\n- Task management\n- List organization\n- Import/Export".to_string(),
+    }
+}
+
 fn init_database(conn: &Connection) -> SqliteResult<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS lists (
@@ -566,7 +595,7 @@ async fn export_tasks_to_file(list_id: Option<String>, db: State<'_, DbConnectio
         };
 
         let mut stmt = conn
-            .prepare("SELECT id, name, color, icon, is_default, created_at, `order` FROM lists")
+            .prepare("SELECT id, name, color, icon, is_default, created_at, order_index FROM lists")
             .map_err(|e| e.to_string())?;
         let lists = stmt.query_map([], |row| {
             Ok(List {
@@ -605,88 +634,131 @@ async fn export_tasks_to_file(list_id: Option<String>, db: State<'_, DbConnectio
 }
 
 #[tauri::command]
-async fn import_tasks_from_file(_app: tauri::AppHandle, db: State<'_, DbConnection>) -> Result<Vec<Task>, String> {
-    let data_dir = get_data_dir();
+async fn import_tasks(json_data: String, db: State<'_, DbConnection>) -> Result<Vec<Task>, String> {
+    let export_data: ExportData = serde_json::from_str(&json_data)
+        .map_err(|e| format!("Failed to parse import data: {}", e))?;
 
-    let mut export_files: Vec<_> = fs::read_dir(&data_dir)
-        .map_err(|e| format!("Cannot read data folder: {}", e))?
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            entry.file_name().to_string_lossy().starts_with("itodo-export-") &&
-            entry.file_name().to_string_lossy().ends_with(".json")
-        })
-        .collect();
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
 
-    export_files.sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
+    let mut imported_tasks = Vec::new();
 
-    if let Some(latest_file) = export_files.first() {
-        let file_path = latest_file.path();
-        let json_data = fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
+    for list in &export_data.lists {
+        let mut stmt = conn
+            .prepare("SELECT id FROM lists WHERE id = ?1")
+            .map_err(|e| e.to_string())?;
+        let exists: Result<String, _> = stmt.query_row([&list.id], |row| row.get(0));
 
-        let export_data: ExportData = serde_json::from_str(&json_data)
-            .map_err(|e| format!("Failed to parse import data: {}", e))?;
+        if exists.is_err() {
+            conn.execute(
+                "INSERT INTO lists (id, name, color, icon, is_default, created_at, order_index) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                (&list.id, &list.name, &list.color, &list.icon, &list.is_default, &list.created_at, &list.order),
+            ).map_err(|e| e.to_string())?;
+        }
+    }
 
+    for task in &export_data.tasks {
+        let new_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+
+        conn.execute(
+            "INSERT INTO tasks (id, title, content, is_completed, is_important, due_date, start_date, remind_time, repeat_rule, list_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            (
+                &new_id,
+                &task.title,
+                &task.content,
+                &task.is_completed,
+                &task.is_important,
+                &task.due_date,
+                &task.start_date,
+                &task.remind_time,
+                &task.repeat_rule,
+                &task.list_id,
+                &now,
+                &now,
+            ),
+        ).map_err(|e| e.to_string())?;
+
+        imported_tasks.push(Task {
+            id: new_id,
+            title: task.title.clone(),
+            content: task.content.clone(),
+            is_completed: task.is_completed,
+            is_important: task.is_important,
+            due_date: task.due_date.clone(),
+            start_date: task.start_date.clone(),
+            remind_time: task.remind_time.clone(),
+            repeat_rule: task.repeat_rule.clone(),
+            list_id: task.list_id.clone(),
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        });
+    }
+
+    info!("Imported {} tasks", imported_tasks.len());
+    Ok(imported_tasks)
+}
+
+#[tauri::command]
+async fn export_tasks_to_path(file_path: String, list_id: Option<String>, db: State<'_, DbConnection>) -> Result<bool, String> {
+    let (tasks, lists) = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
 
-        let mut imported_tasks = Vec::new();
-
-        for list in &export_data.lists {
-            let mut stmt = conn
-                .prepare("SELECT id FROM lists WHERE id = ?1")
-                .map_err(|e| e.to_string())?;
-            let exists: Result<String, _> = stmt.query_row([&list.id], |row| row.get(0));
-
-            if exists.is_err() {
-                conn.execute(
-                    "INSERT INTO lists (id, name, color, icon, is_default, created_at, `order`) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    (&list.id, &list.name, &list.color, &list.icon, &list.is_default, &list.created_at, &list.order),
-                ).map_err(|e| e.to_string())?;
+        let tasks = match list_id {
+            Some(lid) => {
+                let mut stmt = conn
+                    .prepare("SELECT id, title, content, is_completed, is_important, due_date, start_date, remind_time, repeat_rule, list_id, created_at, updated_at FROM tasks WHERE list_id = ?1 ORDER BY is_completed ASC, created_at DESC")
+                    .map_err(|e| e.to_string())?;
+                let result = stmt.query_map([&lid], row_to_task)
+                    .map_err(|e| e.to_string())?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?;
+                result
             }
-        }
+            None => {
+                let mut stmt = conn
+                    .prepare("SELECT id, title, content, is_completed, is_important, due_date, start_date, remind_time, repeat_rule, list_id, created_at, updated_at FROM tasks ORDER BY is_completed ASC, created_at DESC")
+                    .map_err(|e| e.to_string())?;
+                let result = stmt.query_map([], row_to_task)
+                    .map_err(|e| e.to_string())?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?;
+                result
+            }
+        };
 
-        for task in &export_data.tasks {
-            let new_id = Uuid::new_v4().to_string();
-            let now = Utc::now().to_rfc3339();
+        let mut stmt = conn
+            .prepare("SELECT id, name, color, icon, is_default, created_at, order_index FROM lists")
+            .map_err(|e| e.to_string())?;
+        let lists = stmt.query_map([], |row| {
+            Ok(List {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                color: row.get(2)?,
+                icon: row.get(3)?,
+                is_default: row.get(4)?,
+                created_at: row.get(5)?,
+                order: row.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
 
-            conn.execute(
-                "INSERT INTO tasks (id, title, content, is_completed, is_important, due_date, start_date, remind_time, repeat_rule, list_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-                (
-                    &new_id,
-                    &task.title,
-                    &task.content,
-                    &task.is_completed,
-                    &task.is_important,
-                    &task.due_date,
-                    &task.start_date,
-                    &task.remind_time,
-                    &task.repeat_rule,
-                    &task.list_id,
-                    &now,
-                    &now,
-                ),
-            ).map_err(|e| e.to_string())?;
+        (tasks, lists)
+    };
 
-            imported_tasks.push(Task {
-                id: new_id,
-                title: task.title.clone(),
-                content: task.content.clone(),
-                is_completed: task.is_completed,
-                is_important: task.is_important,
-                due_date: task.due_date.clone(),
-                start_date: task.start_date.clone(),
-                remind_time: task.remind_time.clone(),
-                repeat_rule: task.repeat_rule.clone(),
-                list_id: task.list_id.clone(),
-                created_at: now.clone(),
-                updated_at: now.clone(),
-            });
-        }
+    let export_data = ExportData {
+        version: "1.0".to_string(),
+        export_date: Utc::now().to_rfc3339(),
+        tasks,
+        lists,
+    };
 
-        info!("Imported {} tasks", imported_tasks.len());
-        Ok(imported_tasks)
-    } else {
-        Err("No export file found".to_string())
-    }
+    let json_data = serde_json::to_string_pretty(&export_data).map_err(|e| e.to_string())?;
+
+    fs::write(&file_path, json_data).map_err(|e| format!("Failed to write file: {}", e))?;
+    info!("Exported tasks to {:?}", file_path);
+    Ok(true)
 }
 
 // ============== App Setup ==============
@@ -705,6 +777,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .manage(DbConnection(Mutex::new(conn)))
         .invoke_handler(tauri::generate_handler![
             get_lists,
@@ -723,7 +797,10 @@ pub fn run() {
             toggle_task_important,
             toggle_task_completed,
             export_tasks_to_file,
-            import_tasks_from_file,
+            import_tasks,
+            export_tasks_to_path,
+            get_log_path,
+            get_about_info,
         ])
         .setup(|_app| {
             info!("App setup complete");

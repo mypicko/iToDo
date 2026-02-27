@@ -195,7 +195,7 @@ export default function Sidebar({ onShowMessage }: { onShowMessage?: (msg: {titl
   const handleExport = async (listId?: string) => {
     try {
       await exportTasks(listId);
-      onShowMessage?.({ title: isZh ? '导出成功' : 'Export Success', message: isZh ? '任务已导出到数据目录' : 'Tasks exported to data directory' });
+      onShowMessage?.({ title: isZh ? '导出成功' : 'Export Success', message: isZh ? '请在文件对话框选择的位置查看导出文件' : 'Check the file at the location you selected in the dialog' });
     } catch (error) {
       console.error('Export error:', error);
       onShowMessage?.({ title: isZh ? '导出失败' : 'Export Failed', message: String(error) });

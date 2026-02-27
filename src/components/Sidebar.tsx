@@ -182,10 +182,8 @@ export default function Sidebar({ onShowMessage }: { onShowMessage?: (msg: {titl
 
   const showAbout = async () => {
     try {
-      const logPath = await invoke<string>('get_log_path');
       const info = await invoke<{ app_name: string; version: string; developer: string; developer_email?: string; changelog: string }>('get_about_info');
-      const aboutPath = logPath.replace(/\/logs$/, '') + 'about.json';
-      const aboutText = `${info.app_name} v${info.version}\n\n${isZh ? '开发者' : 'Developer'}: ${info.developer}${info.developer_email ? ` (${info.developer_email})` : ''}\n\n${isZh ? '更新日志' : 'Changelog'}:\n${info.changelog}\n\n${isZh ? '关于信息文件路径' : 'About file path'}:\n${aboutPath}`;
+      const aboutText = `${info.app_name} v${info.version}\n\n${isZh ? '开发者' : 'Developer'}: ${info.developer}${info.developer_email ? ` (${info.developer_email})` : ''}\n\n${isZh ? '更新日志' : 'Changelog'}:\n${info.changelog}`;
       onShowMessage?.({ title: isZh ? '关于' : 'About', message: aboutText });
     } catch (error) {
       console.error('Failed to get about info:', error);

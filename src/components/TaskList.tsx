@@ -84,6 +84,7 @@ export default function TaskList() {
 
   const handleDeleteTask = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    setContextMenu(null);
     try {
       await deleteTask(id);
     } catch (error) {

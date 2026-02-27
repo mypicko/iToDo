@@ -1,0 +1,7 @@
+{
+  "app_name": "iToDo",
+  "version": "1.0.0",
+  "developer": "iToDo Team",
+  "developer_email": "",
+  "changelog": "Initial release\n- Task management\n- List organization\n- Import/Export"
+}

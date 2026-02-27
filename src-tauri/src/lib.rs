@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{Manager, State};
 use uuid::Uuid;
 
 // ============== Models ==============
@@ -97,7 +97,7 @@ fn get_log_dir() -> PathBuf {
     get_data_dir().join("logs")
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct AboutInfo {
     pub app_name: String,
     pub version: String,
@@ -111,15 +111,48 @@ fn get_log_path() -> String {
     get_log_dir().to_string_lossy().to_string()
 }
 
-#[tauri::command]
-fn get_about_info() -> AboutInfo {
+fn get_about_config_path() -> PathBuf {
+    get_data_dir().join("about.json")
+}
+
+fn load_about_config() -> AboutInfo {
+    let config_path = get_about_config_path();
+
+    // If file exists in data dir, read it
+    if config_path.exists() {
+        if let Ok(content) = fs::read_to_string(&config_path) {
+            if let Ok(info) = serde_json::from_str::<AboutInfo>(&content) {
+                return info;
+            }
+        }
+    }
+
+    // Return default
     AboutInfo {
         app_name: "iToDo".to_string(),
         version: "1.0.0".to_string(),
         developer: "iToDo".to_string(),
         developer_email: None,
-        changelog: "Initial release\n- Task management\n- List organization\n- Import/Export".to_string(),
+        changelog: "Initial release".to_string(),
     }
+}
+
+#[tauri::command]
+fn get_about_info(app: tauri::AppHandle) -> AboutInfo {
+    // Try to read from resource path (bundled config)
+    if let Ok(resource_path) = app.path().resource_dir() {
+        let bundled_config = resource_path.join("about.json");
+        if bundled_config.exists() {
+            if let Ok(content) = fs::read_to_string(&bundled_config) {
+                if let Ok(info) = serde_json::from_str::<AboutInfo>(&content) {
+                    return info;
+                }
+            }
+        }
+    }
+
+    // Fallback to data dir or default
+    load_about_config()
 }
 
 fn init_database(conn: &Connection) -> SqliteResult<()> {
